@@ -58,7 +58,7 @@ def plantuml_to_png(uml_code):
     return None
 
 # --- API PEXELS & ICONIFY --- #
-PEXELS_API_KEY = "TA_CLE_PEXELS_ICI"  # Remplace ici par ta clé API Pexels
+PEXELS_API_KEY = "301dcnTpPjiaMdSWCOvXz8Cj62pO0fgLPAdcz6EtHLvShgfPqN73YXQQ"  # Remplace ici par ta clé API Pexels
 
 def search_pexels(query, per_page=6):
     headers = {"Authorization": PEXELS_API_KEY}
