@@ -53,7 +53,6 @@ TEMPLATES = [
 PALETTE_1 = ["#e53935", "#c62828", "#8e24aa", "#43a047", "#d4e157", "#81c784"]
 PALETTE_2 = ["#1976d2", "#1976d2", "#64b5f6", "#90caf9", "#0097a7", "#263238"]
 DIAGRAMMES = [
-DIAGRAMMES = [
     {"label": "Camembert", "file": "https://upload.wikimedia.org/wikipedia/commons/3/3e/Pie-chart-example.png"},
     {"label": "Graphique 1", "file": "https://upload.wikimedia.org/wikipedia/commons/7/77/Bar_chart_example.png"},
     {"label": "Graphique 2", "file": "https://upload.wikimedia.org/wikipedia/commons/3/3a/Line_chart_example.png"},
