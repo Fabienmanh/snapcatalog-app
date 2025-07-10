@@ -1,169 +1,372 @@
 import streamlit as st
+import pandas as pd
+import os
 import requests
+import zlib
+import tempfile
+from fuzzywuzzy import process
+from reportlab.platypus import (BaseDocTemplate, PageTemplate, Frame, FrameBreak, Paragraph, Spacer,
+                                Image as RLImage, PageBreak, NextPageTemplate)
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+from PIL import Image as PILImage
+import urllib.request
 
-st.set_page_config(page_title="SnapCatalog", layout="wide")
+# --- PLANTUML --- #
+def plantuml_encode(uml_code):
+    def encode(text):
+        data = zlib.compress(text.encode('utf-8'))
+        res = ''
+        for i in range(0, len(data), 3):
+            if i+2<len(data):
+                res += _encode3bytes(data[i],data[i+1],data[i+2])
+            elif i+1<len(data):
+                res += _encode3bytes(data[i],data[i+1],0)
+            else:
+                res += _encode3bytes(data[i],0,0)
+        return res
+    def _encode3bytes(b1,b2,b3):
+        c1 = b1 >> 2
+        c2 = ((b1 & 0x3) << 4) | (b2 >> 4)
+        c3 = ((b2 & 0xF) << 2) | (b3 >> 6)
+        c4 = b3 & 0x3F
+        return ''.join([encode6bit(c) for c in (c1,c2,c3,c4)])
+    def encode6bit(b):
+        if b < 10: return chr(48 + b)
+        b -= 10
+        if b < 26: return chr(65 + b)
+        b -= 26
+        if b < 26: return chr(97 + b)
+        b -= 26
+        if b == 0: return '-'
+        if b == 1: return '_'
+        return '?'
+    return encode(uml_code)
 
-TEMPLATES = [
-    {"name": "Carte moderne", "color": "#aee2fb"},
-    {"name": "Carte classique", "color": "#d2fbb7"},
-    {"name": "Carte grille", "color": "#fbb7b7"},
-]
+def plantuml_to_png(uml_code):
+    base_url = "https://www.plantuml.com/plantuml/png/"
+    encoded = plantuml_encode(uml_code)
+    url = base_url + encoded
+    response = requests.get(url)
+    if response.status_code == 200:
+        tmpimg = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmpimg.write(response.content)
+        tmpimg.close()
+        return tmpimg.name
+    return None
 
-PALETTE_1 = ["#e53935", "#c62828", "#8e24aa", "#43a047", "#d4e157", "#81c784"]
-PALETTE_2 = ["#1976d2", "#1976d2", "#64b5f6", "#90caf9", "#0097a7", "#263238"]
+# --- API PEXELS & ICONIFY --- #
+PEXELS_API_KEY = "TA_CLE_PEXELS_ICI"  # Remplace ici par ta clé API Pexels
 
-DIAGRAMMES = [
-    {"label": "Camembert", "file": "images/chart1.png"},
-    {"label": "Graphique 1", "file": "images/chart2.png"},
-    {"label": "Graphique 2", "file": "images/chart3.png"},
-]
+def search_pexels(query, per_page=6):
+    headers = {"Authorization": PEXELS_API_KEY}
+    url = f"https://api.pexels.com/v1/search?query={query}&per_page={per_page}"
+    r = requests.get(url, headers=headers)
+    if r.status_code == 200:
+        return r.json().get('photos', [])
+    else:
+        return []
 
-if "template" not in st.session_state:
-    st.session_state.template = 0
-if "color" not in st.session_state:
-    st.session_state.color = PALETTE_1[0]
-if "pexels_images" not in st.session_state:
-    st.session_state.pexels_images = []
-if "pexels_selected" not in st.session_state:
-    st.session_state.pexels_selected = None
+def download_image(url):
+    tmpimg = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+    urllib.request.urlretrieve(url, tmpimg.name)
+    return tmpimg.name
 
-# --- SIDEBAR (gauche) ---
-with st.sidebar:
-    st.markdown("## Template")
-    temp_cols = st.columns(3)
-    for i, t in enumerate(TEMPLATES):
-        with temp_cols[i]:
-            if st.button("", key=f"template_{i}", help=t["name"]):
-                st.session_state.template = i
-            st.markdown(
-                f"<div style='width:60px;height:50px;background:{t['color']};"
-                f"border:2px solid {'#333' if st.session_state.template==i else '#bbb'};"
-                f"display:flex;align-items:center;justify-content:center;border-radius:5px;cursor:pointer;'>{t['name'].split()[1]}</div>",
-                unsafe_allow_html=True,
-            )
-    st.markdown("---")
-    st.markdown("## Couleurs")
-    palette_rows = [PALETTE_1, PALETTE_2]
-    for row_idx, row in enumerate(palette_rows):
-        row_cols = st.columns(len(row))
-        for i, c in enumerate(row):
-            with row_cols[i]:
-                if st.button(" ", key=f"color_{row_idx}_{i}", help=c):
-                    st.session_state.color = c
-                st.markdown(
-                    f"<div style='width:32px;height:32px;background:{c};"
-                    f"border:2px solid {'#222' if st.session_state.color==c else '#eee'};border-radius:5px;margin:auto;'></div>",
-                    unsafe_allow_html=True,
-                )
-    st.markdown("---")
-    st.markdown("## Images de couverture (API Pexels)")
-    # Recherche API Pexels
-    PEXELS_API_KEY = "TA_CLE_PEXELS_ICI"   # REMPLACE ICI
-    pexels_query = st.text_input("Mot-clé (ex: maison, ville, nature)", "")
-    if pexels_query:
-        headers = {"Authorization": PEXELS_API_KEY}
-        url = f"https://api.pexels.com/v1/search?query={pexels_query}&per_page=6"
-        r = requests.get(url, headers=headers)
-        imgs = []
+def search_iconify(query, limit=5):
+    try:
+        api_url = f"https://api.iconify.design/search?query={query}"
+        r = requests.get(api_url)
         if r.status_code == 200:
-            for res in r.json().get("photos", []):
-                imgs.append(res['src']['large'])
-        st.session_state.pexels_images = imgs
-    # Affichage des résultats + sélection
-    if st.session_state.pexels_images:
-        imgcols = st.columns(len(st.session_state.pexels_images))
-        for i, img_url in enumerate(st.session_state.pexels_images):
-            with imgcols[i]:
-                st.image(img_url, width=90)
-                if st.button("Utiliser", key=f"usepexels_{i}"):
-                    st.session_state.pexels_selected = img_url
-    if st.session_state.pexels_selected:
-        st.image(st.session_state.pexels_selected, caption="Image sélectionnée", use_container_width=True)
+            result = r.json()
+            found = []
+            for ic in result.get("icons", []):
+                prefix = ic.get("prefix")
+                name = ic.get("name")
+                if prefix and name:
+                    found.append(f"{prefix}:{name}")
+            return found[:limit]
+    except Exception:
+        pass
+    return []
 
-    st.markdown("---")
-    st.markdown("## Diagramme")
-    diag_cols = st.columns(len(DIAGRAMMES))
-    for i, dg in enumerate(DIAGRAMMES):
-        with diag_cols[i]:
-            st.image(dg["file"], width=40)
-            if st.button("Choisir", key=f"diag_{i}"):
-                st.session_state.diagramme = i
-            if st.session_state.get("diagramme", 0) == i:
-                st.markdown("<div style='color:#1976d2;text-align:center;'>✓</div>", unsafe_allow_html=True)
+def download_iconify_png(icon_name, size=64):
+    prefix, name = icon_name.split(":")
+    url = f"https://api.iconify.design/{prefix}/{name}.png?width={size}&height={size}"
+    tmpimg = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    urllib.request.urlretrieve(url, tmpimg.name)
+    return tmpimg.name
 
-# --- ZONE CENTRALE ---
-template = TEMPLATES[st.session_state.template]
-border_color = st.session_state.color
+# --- GESTION ETAT --- #
+if "wizard_step" not in st.session_state:
+    st.session_state.wizard_step = 0
+if "import_mode" not in st.session_state:
+    st.session_state.import_mode = None
+if "uploaded_file" not in st.session_state:
+    st.session_state.uploaded_file = None
+if "df" not in st.session_state:
+    st.session_state.df = None
+if "mapping" not in st.session_state:
+    st.session_state.mapping = None
+if "catalogue_rows" not in st.session_state:
+    st.session_state.catalogue_rows = []
+if "pexels_cover_path" not in st.session_state:
+    st.session_state.pexels_cover_path = None
+if "selected_icon_path" not in st.session_state:
+    st.session_state.selected_icon_path = None
 
-st.markdown(
-    f"<h1 style='text-align:center;font-weight:800;'>{'SnapCatalog'}</h1>"
-    "<p style='text-align:center;font-size:1.2em;color:#888;'>Créer votre catalogue page par page en un clin d'œil</p>",
-    unsafe_allow_html=True
+def reset_all():
+    st.session_state.wizard_step = 0
+    st.session_state.import_mode = None
+    st.session_state.uploaded_file = None
+    st.session_state.df = None
+    st.session_state.mapping = None
+    st.session_state.catalogue_rows = []
+    st.session_state.pexels_cover_path = None
+    st.session_state.selected_icon_path = None
+
+# --- SIDEBAR --- #
+st.sidebar.title("📖 SnapCatalog")
+st.sidebar.markdown("Bienvenue dans SnapCatalog.")
+st.sidebar.subheader("Thème et couleurs")
+main_color = st.sidebar.color_picker("Couleur principale", "#1976d2")
+bg_color = st.sidebar.color_picker("Fond de carte", "#e3f2fd")
+template = st.sidebar.selectbox(
+    "Template de fiche",
+    ["Carte moderne", "Classique", "Grille"]
 )
-st.write("")
+TITLE_COLOR = colors.HexColor(main_color)
+CARD_BG_COLOR = colors.HexColor(bg_color)
 
-# Bloc type dynamique
-bloc_types = [
-    "4 blocs de textes par pages",
-    "2 blocs de textes par pages",
-    "2 blocs de textes et 2 blocs d'images par pages",
-    "4 blocs d'images par pages"
+# --- COVER/ICONE PEXELS/ICONIFY --- #
+st.sidebar.subheader("Image de couverture via Pexels")
+pexels_query = st.sidebar.text_input("Mot-clé Pexels (ex : nature, ville, fleur)", "")
+if pexels_query:
+    pexels_results = search_pexels(pexels_query, per_page=6)
+    cols = st.sidebar.columns(len(pexels_results))
+    for i, photo in enumerate(pexels_results):
+        with cols[i]:
+            st.image(photo['src']['medium'], caption=photo['photographer'], use_container_width=True)
+            if st.button(f"Utiliser", key=f"pexels_{i}"):
+                path = download_image(photo['src'].get('original') or photo['src'].get('large'))
+                st.session_state.pexels_cover_path = path
+if st.session_state.pexels_cover_path:
+    st.sidebar.image(st.session_state.pexels_cover_path, caption="Couverture sélectionnée", use_container_width=True)
+
+st.sidebar.subheader("Icône pour le sommaire/fiche")
+iconify_query = st.sidebar.text_input("Mot-clé icône (ex : star, home, cart)", "")
+if iconify_query:
+    icon_names = search_iconify(iconify_query, limit=5)
+    cols = st.sidebar.columns(len(icon_names))
+    for i, icon in enumerate(icon_names):
+        icon_url = f"https://api.iconify.design/{icon.replace(':', '/')}.png?width=48&height=48"
+        with cols[i]:
+            st.image(icon_url, width=32)
+            if st.button(f"Choisir", key=f"iconify_{i}"):
+                path = download_iconify_png(icon, size=64)
+                st.session_state.selected_icon_path = path
+if st.session_state.selected_icon_path:
+    st.sidebar.image(st.session_state.selected_icon_path, caption="Icône sélectionnée", width=32)
+
+# --- CONSTANTES --- #
+CATALOGUE_TITLE = "Catalogue SnapCatalog"
+CATALOGUE_SUBTITLE = "Tous nos produits en un coup d’œil"
+CARDS_PER_PAGE = 2
+LOGO_PATH = "assets/logo.png"
+FIELDS = [
+    "TITRE", "DESCRIPTION", "PRIX", "CODE_DEVISE", "QUANTITÉ",
+    "IMAGE 1", "RÉFÉRENCE", "TAGS", "MATÉRIAUX", "DIAGRAMME_PLANTUML"
 ]
-selected_bloc = st.radio(
-    "Quels blocs vous souhaitez ?", bloc_types,
-    index=2,
-    horizontal=True,
-    key="bloctype"
+
+# --- OUTILS --- #
+def get_image_size_preserve_ratio(img_path, max_width_cm, max_height_cm):
+    img = PILImage.open(img_path)
+    w, h = img.size
+    max_w = max_width_cm * cm
+    max_h = max_height_cm * cm
+    ratio = min(max_w / w, max_h / h)
+    return w * ratio, h * ratio
+
+def get_image_local_or_url(img_value):
+    if isinstance(img_value, str) and img_value.lower().startswith("http"):
+        tmpimg = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+        try:
+            urllib.request.urlretrieve(img_value, tmpimg.name)
+            return tmpimg.name
+        except Exception:
+            return None
+    else:
+        img_path = os.path.join("images", str(img_value))
+        if os.path.isfile(img_path):
+            return img_path
+        return None
+
+def couverture_page(canvas, doc):
+    width, height = A4
+    img_path = st.session_state.pexels_cover_path if st.session_state.pexels_cover_path else LOGO_PATH
+    if img_path and os.path.isfile(img_path):
+        canvas.drawImage(img_path, width/2 - 4*cm, height - 10*cm, width=8*cm, preserveAspectRatio=True, mask='auto')
+    if st.session_state.selected_icon_path and os.path.isfile(st.session_state.selected_icon_path):
+        canvas.drawImage(st.session_state.selected_icon_path, 2*cm, height - 3*cm, width=1.3*cm, preserveAspectRatio=True, mask='auto')
+    canvas.setFont("Helvetica-Bold", 24)
+    canvas.setFillColor(TITLE_COLOR)
+    canvas.drawCentredString(width/2, height - 12*cm, CATALOGUE_TITLE)
+    canvas.setFont("Helvetica", 14)
+    canvas.setFillColor(colors.grey)
+    canvas.drawCentredString(width/2, height - 13.2*cm, CATALOGUE_SUBTITLE)
+    canvas.setStrokeColor(TITLE_COLOR)
+    canvas.setLineWidth(1)
+    canvas.line(2*cm, height - 13.6*cm, width - 2*cm, height - 13.6*cm)
+
+# --- MENU MODE --- #
+mode = st.sidebar.radio(
+    "Mode de création du catalogue :",
+    (
+        "Importer un fichier (CSV, Excel, JSON, ...)",
+        "Créer page par page"
+    ),
+    index=0 if st.session_state.import_mode != "manual" else 1
 )
-st.markdown(" ")
+if mode == "Importer un fichier (CSV, Excel, JSON, ...)":
+    if st.session_state.import_mode != "file":
+        reset_all()
+        st.session_state.import_mode = "file"
+        st.session_state.wizard_step = 1
+        st.rerun()
+else:
+    if st.session_state.import_mode != "manual":
+        reset_all()
+        st.session_state.import_mode = "manual"
+        st.session_state.wizard_step = 10
+        st.rerun()
 
-colG, colD = st.columns([1, 1])
-with colG:
-    st.markdown(
-        f"<div style='border:2px solid {border_color};border-radius:8px;padding:14px 24px 16px 24px;"
-        f"background:{template['color']};width:100%;min-height:420px;box-shadow:0 2px 8px #0001;'>"
-        f"<div style='font-size:2em;font-weight:800;'>{'Catalogue maison 2025'}</div>"
-        f"<div style='float:right;font-size:0.9em;background:#eee;padding:6px 12px;border-radius:7px;margin-top:-38px;margin-right:-8px;'>Mettez<br>votre logo<br>ici</div>"
-        + (f"<img src='{st.session_state.pexels_selected}' style='width:100%;border-radius:8px;margin-top:18px;'>" if st.session_state.pexels_selected else "")
-        + """
-        <div style='background:rgba(255,255,255,0.85);padding:10px 18px;margin-top:-80px;margin-left:18px;width:60%;font-size:1.1em;border-radius:8px;'>
-        Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut
-        </div></div>
-        """,
-        unsafe_allow_html=True
-    )
-    st.markdown(
-        "<div style='text-align:center;color:#888;margin-top:8px;'>Couverture</div>",
-        unsafe_allow_html=True
-    )
+if st.session_state.import_mode == "file":
+    if st.session_state.wizard_step == 1:
+        st.title("📘 Étape 1 — Import du fichier")
+        uploaded_file = st.file_uploader("Télécharge ton fichier (CSV, Excel, ...)", type=["csv", "xlsx", "xls", "json", "tsv", "parquet"])
+        if uploaded_file is not None:
+            try:
+                sep = st.selectbox("Séparateur du fichier CSV :", [",", ";", "\t", "|"], index=0)
+                if uploaded_file.name.lower().endswith('.csv'):
+                    df = pd.read_csv(uploaded_file, sep=sep)
+                elif uploaded_file.name.lower().endswith('.tsv'):
+                    df = pd.read_csv(uploaded_file, sep="\t")
+                elif uploaded_file.name.lower().endswith('.xlsx') or uploaded_file.name.lower().endswith('.xls'):
+                    df = pd.read_excel(uploaded_file)
+                elif uploaded_file.name.lower().endswith('.json'):
+                    df = pd.read_json(uploaded_file)
+                elif uploaded_file.name.lower().endswith('.parquet'):
+                    df = pd.read_parquet(uploaded_file)
+                else:
+                    st.error("❌ Format non reconnu.")
+                    st.stop()
+                if df.empty or len(df.columns) == 0:
+                    st.error("❌ Fichier vide ou non conforme. Vérifie ton fichier et le séparateur choisi.")
+                    st.stop()
+                st.success("✅ Fichier chargé avec succès !")
+                st.dataframe(df.head())
+                st.session_state.uploaded_file = uploaded_file
+                st.session_state.df = df
+                if st.button("Continuer ➡️"):
+                    st.session_state.wizard_step = 2
+                    st.rerun()
+            except Exception as e:
+                st.error(f"❌ Erreur lors de la lecture du fichier : {e}")
+        st.stop()
+    if st.session_state.wizard_step == 2:
+        st.title("🧠 Étape 2 — Mapping automatique")
+        df = st.session_state.df
+        mapping = {}
+        for expected in FIELDS:
+            match, score = process.extractOne(expected, df.columns)
+            if score > 75:
+                mapping[expected] = match
+            else:
+                mapping[expected] = None
+        st.session_state.mapping = mapping
+        st.write("🔎 Correspondance automatique proposée :", mapping)
+        st.dataframe(df.head())
+        manquants = [k for k, v in mapping.items() if v is None]
+        if manquants:
+            st.warning(f"Il manque les colonnes suivantes : {', '.join(manquants)}.")
+        if st.button("Continuer ➡️"):
+            st.session_state.wizard_step = 3
+            st.rerun()
+        if st.button("⬅️ Retour"):
+            reset_all()
+            st.rerun()
+        st.stop()
+    if st.session_state.wizard_step == 3:
+        st.title("🛠️ Étape 3 — Correction manuelle")
+        df = st.session_state.df
+        mapping = st.session_state.mapping
+        new_mapping = mapping.copy()
+        columns_available = list(df.columns)
+        manquants = [k for k, v in mapping.items() if v is None]
+        for col in manquants:
+            choix = st.selectbox(f"Mapper la colonne « {col} » :", ["(Aucune)"] + columns_available, key=f"select_{col}")
+            if choix != "(Aucune)":
+                new_mapping[col] = choix
+        st.write("Mapping final :", new_mapping)
+        for expected, real in new_mapping.items():
+            if real and real in df.columns:
+                df = df.rename(columns={real: expected})
+        st.dataframe(df.head())
+        if st.button("Continuer vers le PDF ➡️"):
+            st.session_state.df = df
+            st.session_state.mapping = new_mapping
+            st.session_state.wizard_step = 4
+            st.rerun()
+        if st.button("⬅️ Retour"):
+            st.session_state.wizard_step = 2
+            st.rerun()
+        st.stop()
 
-with colD:
-    st.markdown(
-        f"<div style='border:2px solid {border_color};border-radius:8px;padding:14px 16px 16px 16px;"
-        f"background:#fff;width:100%;min-height:420px;box-shadow:0 2px 8px {border_color}22;'>"
-        f"<div style='font-size:1.4em;font-weight:700;'>Titre de la page</div>"
-        "<div style='display:flex;gap:14px;margin-top:10px;'>"
-        + (f"<img src='{st.session_state.pexels_selected}' style='width:44%;border-radius:7px;'>" if st.session_state.pexels_selected else "")
-        + """<div style='width:50%;font-size:1em;color:#333;'>
-        Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua...
-        </div></div>
-        <div style='display:flex;gap:14px;margin-top:18px;'>
-        <div style='width:46%;font-size:1em;color:#333;'>
-        Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore...
-        </div>"""
-        + (f"<img src='{st.session_state.pexels_selected}' style='width:46%;border-radius:7px;'>" if st.session_state.pexels_selected else "") +
-        "</div></div>",
-        unsafe_allow_html=True
-    )
-    st.markdown(
-        "<div style='text-align:center;color:#888;margin-top:8px;'>Page 2</div>",
-        unsafe_allow_html=True
-    )
+if st.session_state.import_mode == "manual":
+    if st.session_state.wizard_step == 10:
+        st.title("📝 Étape 1 — Ajouter des fiches produits")
+        st.write("Ajoute autant de fiches que tu veux (une par une). Tu pourras ensuite télécharger ton catalogue.")
+        with st.form("add_product_form"):
+            data = {}
+            for field in FIELDS:
+                data[field] = st.text_input(field)
+            # Champ diagramme
+            data["DIAGRAMME_PLANTUML"] = st.text_area("Diagramme PlantUML (optionnel)", height=100)
+            submitted = st.form_submit_button("Ajouter la fiche")
+            if submitted:
+                st.session_state.catalogue_rows.append(data)
+                st.success("Fiche ajoutée !")
+        if st.session_state.catalogue_rows:
+            st.write("Aperçu du catalogue en cours :")
+            df_manual = pd.DataFrame(st.session_state.catalogue_rows)
+            st.dataframe(df_manual)
+            st.download_button("⬇️ Exporter en CSV", data=df_manual.to_csv(index=False), file_name="catalogue.csv")
+            st.download_button("⬇️ Exporter en JSON", data=df_manual.to_json(orient="records", force_ascii=False), file_name="catalogue.json")
+        else:
+            st.info("Ajoute au moins une fiche pour prévisualiser ton catalogue.")
+        if st.button("Générer le PDF ➡️"):
+            if st.session_state.catalogue_rows:
+                st.session_state.df = pd.DataFrame(st.session_state.catalogue_rows)
+                st.session_state.wizard_step = 4
+                st.rerun()
+            else:
+                st.warning("Ajoute au moins une fiche avant de générer le PDF.")
+        if st.button("⬅️ Retour"):
+            reset_all()
+            st.rerun()
+        st.stop()
 
-# --- INFOS ---
-st.markdown(
-    "<br><hr><div style='text-align:center;color:#aaa;'>"
-    "Aperçu dynamique — Les images viennent de l’API Pexels.<br>"
-    "Change le template ou la couleur, l’aperçu s’actualise !"
-    "</div>", unsafe_allow_html=True
-)
+if st.session_state.wizard_step == 4:
+    st.title("📄 Étape finale — Télécharger le PDF catalogue")
+    df = st.session_state.df
+    sommaire_items = [(str(row.get("TITRE", "")), idx // CARDS_PER_PAGE + 3) for idx, row in df.iterrows()]
+    def sommaire_page(canvas, doc):
+        width, height = A4
+        canvas.setFont("Helvetica-Bold", 18)
+        canvas.setFillColor(TITLE_COLOR)
+        canvas.drawCentredString(width/2, height - 2.5*cm, "Sommaire")
+        y = height - 3.5*cm
+        canvas.setFont("Helvetica", 11)
+        for titre, page in sommaire_items:
+            canvas.drawString(2.3*cm, y, f"{titre}")
