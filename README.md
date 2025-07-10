@@ -1,0 +1,1 @@
+# snapcatalog-app
