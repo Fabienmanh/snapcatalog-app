@@ -1,0 +1,6 @@
+streamlit
+pandas
+pillow
+reportlab
+fuzzywuzzy
+requests
