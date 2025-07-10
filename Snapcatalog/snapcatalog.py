@@ -3,7 +3,18 @@ import pandas as pd
 import os
 import requests
 import zlib
+import tempfile
+from fuzzywuzzy import process
+from reportlab.platypus import (BaseDocTemplate, PageTemplate, Frame, FrameBreak, Paragraph, Spacer,
+                                Image as RLImage, PageBreak, NextPageTemplate)
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+from PIL import Image as PILImage
+import urllib.request
 
+# --- PLANTUML --- #
 def plantuml_encode(uml_code):
     def encode(text):
         data = zlib.compress(text.encode('utf-8'))
@@ -34,9 +45,6 @@ def plantuml_encode(uml_code):
         return '?'
     return encode(uml_code)
 
-import requests
-import tempfile
-
 def plantuml_to_png(uml_code):
     base_url = "https://www.plantuml.com/plantuml/png/"
     encoded = plantuml_encode(uml_code)
@@ -49,19 +57,48 @@ def plantuml_to_png(uml_code):
         return tmpimg.name
     return None
 
-from fuzzywuzzy import process
-from reportlab.platypus import (BaseDocTemplate, PageTemplate, Frame, FrameBreak, Paragraph, Spacer,
-                                Image as RLImage, PageBreak, NextPageTemplate)
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm
-from reportlab.lib import colors
-import tempfile
-from PIL import Image as PILImage
-import urllib.request
+# --- API PEXELS & ICONIFY --- #
+PEXELS_API_KEY = "TA_CLE_PEXELS_ICI"  # Remplace ici par ta clé API Pexels
 
-PEXELS_API_KEY = "301dcnTpPjiaMdSWCOvXz8Cj62pO0fgLPAdcz6EtHLvShgfPqN73YXQQ"  # ⚠️ Remplace ici par ta clé API Pexels
+def search_pexels(query, per_page=6):
+    headers = {"Authorization": PEXELS_API_KEY}
+    url = f"https://api.pexels.com/v1/search?query={query}&per_page={per_page}"
+    r = requests.get(url, headers=headers)
+    if r.status_code == 200:
+        return r.json().get('photos', [])
+    else:
+        return []
 
+def download_image(url):
+    tmpimg = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+    urllib.request.urlretrieve(url, tmpimg.name)
+    return tmpimg.name
+
+def search_iconify(query, limit=5):
+    try:
+        api_url = f"https://api.iconify.design/search?query={query}"
+        r = requests.get(api_url)
+        if r.status_code == 200:
+            result = r.json()
+            found = []
+            for ic in result.get("icons", []):
+                prefix = ic.get("prefix")
+                name = ic.get("name")
+                if prefix and name:
+                    found.append(f"{prefix}:{name}")
+            return found[:limit]
+    except Exception:
+        pass
+    return []
+
+def download_iconify_png(icon_name, size=64):
+    prefix, name = icon_name.split(":")
+    url = f"https://api.iconify.design/{prefix}/{name}.png?width={size}&height={size}"
+    tmpimg = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    urllib.request.urlretrieve(url, tmpimg.name)
+    return tmpimg.name
+
+# --- GESTION ETAT --- #
 if "wizard_step" not in st.session_state:
     st.session_state.wizard_step = 0
 if "import_mode" not in st.session_state:
@@ -89,17 +126,60 @@ def reset_all():
     st.session_state.pexels_cover_path = None
     st.session_state.selected_icon_path = None
 
+# --- SIDEBAR --- #
+st.sidebar.title("📖 SnapCatalog")
+st.sidebar.markdown("Bienvenue dans SnapCatalog.")
+st.sidebar.subheader("Thème et couleurs")
+main_color = st.sidebar.color_picker("Couleur principale", "#1976d2")
+bg_color = st.sidebar.color_picker("Fond de carte", "#e3f2fd")
+template = st.sidebar.selectbox(
+    "Template de fiche",
+    ["Carte moderne", "Classique", "Grille"]
+)
+TITLE_COLOR = colors.HexColor(main_color)
+CARD_BG_COLOR = colors.HexColor(bg_color)
+
+# --- COVER/ICONE PEXELS/ICONIFY --- #
+st.sidebar.subheader("Image de couverture via Pexels")
+pexels_query = st.sidebar.text_input("Mot-clé Pexels (ex : nature, ville, fleur)", "")
+if pexels_query:
+    pexels_results = search_pexels(pexels_query, per_page=6)
+    cols = st.sidebar.columns(len(pexels_results))
+    for i, photo in enumerate(pexels_results):
+        with cols[i]:
+            st.image(photo['src']['medium'], caption=photo['photographer'], use_container_width=True)
+            if st.button(f"Utiliser", key=f"pexels_{i}"):
+                path = download_image(photo['src'].get('original') or photo['src'].get('large'))
+                st.session_state.pexels_cover_path = path
+if st.session_state.pexels_cover_path:
+    st.sidebar.image(st.session_state.pexels_cover_path, caption="Couverture sélectionnée", use_container_width=True)
+
+st.sidebar.subheader("Icône pour le sommaire/fiche")
+iconify_query = st.sidebar.text_input("Mot-clé icône (ex : star, home, cart)", "")
+if iconify_query:
+    icon_names = search_iconify(iconify_query, limit=5)
+    cols = st.sidebar.columns(len(icon_names))
+    for i, icon in enumerate(icon_names):
+        icon_url = f"https://api.iconify.design/{icon.replace(':', '/')}.png?width=48&height=48"
+        with cols[i]:
+            st.image(icon_url, width=32)
+            if st.button(f"Choisir", key=f"iconify_{i}"):
+                path = download_iconify_png(icon, size=64)
+                st.session_state.selected_icon_path = path
+if st.session_state.selected_icon_path:
+    st.sidebar.image(st.session_state.selected_icon_path, caption="Icône sélectionnée", width=32)
+
+# --- CONSTANTES --- #
 CATALOGUE_TITLE = "Catalogue SnapCatalog"
 CATALOGUE_SUBTITLE = "Tous nos produits en un coup d’œil"
-TITLE_COLOR = colors.HexColor("#1976d2")
-CARD_BG_COLOR = colors.HexColor("#e3f2fd")
 CARDS_PER_PAGE = 2
 LOGO_PATH = "assets/logo.png"
 FIELDS = [
     "TITRE", "DESCRIPTION", "PRIX", "CODE_DEVISE", "QUANTITÉ",
-    "IMAGE 1", "RÉFÉRENCE", "TAGS", "MATÉRIAUX"
+    "IMAGE 1", "RÉFÉRENCE", "TAGS", "MATÉRIAUX", "DIAGRAMME_PLANTUML"
 ]
 
+# --- OUTILS --- #
 def get_image_size_preserve_ratio(img_path, max_width_cm, max_height_cm):
     img = PILImage.open(img_path)
     w, h = img.size
@@ -122,86 +202,12 @@ def get_image_local_or_url(img_value):
             return img_path
         return None
 
-# --- Pexels image search/download ---
-def search_pexels(query, per_page=6):
-    headers = {"Authorization": PEXELS_API_KEY}
-    url = f"https://api.pexels.com/v1/search?query={query}&per_page={per_page}"
-    r = requests.get(url, headers=headers)
-    if r.status_code == 200:
-        return r.json().get('photos', [])
-    else:
-        return []
-
-def download_image(url):
-    tmpimg = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-    urllib.request.urlretrieve(url, tmpimg.name)
-    return tmpimg.name
-
-# --- Iconify icon download (PNG only) ---
-def search_iconify(query, limit=5):
-    try:
-        api_url = f"https://api.iconify.design/search?query={query}"
-        r = requests.get(api_url)
-        if r.status_code == 200:
-            result = r.json()
-            # We want icon names (prefix:name)
-            found = []
-            for ic in result.get("icons", []):
-                prefix = ic.get("prefix")
-                name = ic.get("name")
-                if prefix and name:
-                    found.append(f"{prefix}:{name}")
-            return found[:limit]
-    except Exception:
-        pass
-    return []
-
-def download_iconify_png(icon_name, size=64):
-    # icon_name format: prefix:name
-    prefix, name = icon_name.split(":")
-    url = f"https://api.iconify.design/{prefix}/{name}.png?width={size}&height={size}"
-    tmpimg = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    urllib.request.urlretrieve(url, tmpimg.name)
-    return tmpimg.name
-
-# ---- UI : sélection image couverture Pexels ----
-st.sidebar.subheader("Image de couverture via Pexels")
-pexels_query = st.sidebar.text_input("Mot-clé Pexels (ex : nature, ville, fleur)", "")
-if pexels_query:
-    pexels_results = search_pexels(pexels_query, per_page=6)
-    cols = st.sidebar.columns(len(pexels_results))
-    for i, photo in enumerate(pexels_results):
-        with cols[i]:
-            st.image(photo['src']['medium'], caption=photo['photographer'], use_column_width=True)
-            if st.button(f"Utiliser", key=f"pexels_{i}"):
-                path = download_image(photo['src']['large2x'])
-                st.session_state.pexels_cover_path = path
-if st.session_state.pexels_cover_path:
-    st.sidebar.image(st.session_state.pexels_cover_path, caption="Couverture sélectionnée", use_column_width=True)
-
-# ---- UI : sélection icône via Iconify ----
-st.sidebar.subheader("Icône pour le sommaire/fiche")
-iconify_query = st.sidebar.text_input("Mot-clé icône (ex : star, home, cart)", "")
-if iconify_query:
-    icon_names = search_iconify(iconify_query, limit=5)
-    cols = st.sidebar.columns(len(icon_names))
-    for i, icon in enumerate(icon_names):
-        icon_url = f"https://api.iconify.design/{icon.replace(':', '/')}.png?width=48&height=48"
-        with cols[i]:
-            st.image(icon_url, width=32)
-            if st.button(f"Choisir", key=f"iconify_{i}"):
-                path = download_iconify_png(icon, size=64)
-                st.session_state.selected_icon_path = path
-if st.session_state.selected_icon_path:
-    st.sidebar.image(st.session_state.selected_icon_path, caption="Icône sélectionnée", width=32)
-
 def couverture_page(canvas, doc):
     width, height = A4
     img_path = st.session_state.pexels_cover_path if st.session_state.pexels_cover_path else LOGO_PATH
     if img_path and os.path.isfile(img_path):
         canvas.drawImage(img_path, width/2 - 4*cm, height - 10*cm, width=8*cm, preserveAspectRatio=True, mask='auto')
     if st.session_state.selected_icon_path and os.path.isfile(st.session_state.selected_icon_path):
-        # icône en haut à gauche
         canvas.drawImage(st.session_state.selected_icon_path, 2*cm, height - 3*cm, width=1.3*cm, preserveAspectRatio=True, mask='auto')
     canvas.setFont("Helvetica-Bold", 24)
     canvas.setFillColor(TITLE_COLOR)
@@ -213,8 +219,7 @@ def couverture_page(canvas, doc):
     canvas.setLineWidth(1)
     canvas.line(2*cm, height - 13.6*cm, width - 2*cm, height - 13.6*cm)
 
-st.sidebar.title("📖 SnapCatalog")
-st.sidebar.markdown("Bienvenue dans SnapCatalog.")
+# --- MENU MODE --- #
 mode = st.sidebar.radio(
     "Mode de création du catalogue :",
     (
@@ -235,11 +240,6 @@ else:
         st.session_state.import_mode = "manual"
         st.session_state.wizard_step = 10
         st.rerun()
-st.sidebar.markdown("---")
-if st.session_state.wizard_step > 0:
-    st.sidebar.markdown(f"**Étape en cours :** {st.session_state.wizard_step}")
-st.sidebar.markdown("---")
-st.sidebar.info("Besoin d’aide ? Contactez le support ou consultez la documentation.")
 
 if st.session_state.import_mode == "file":
     if st.session_state.wizard_step == 1:
@@ -331,6 +331,8 @@ if st.session_state.import_mode == "manual":
             data = {}
             for field in FIELDS:
                 data[field] = st.text_input(field)
+            # Champ diagramme
+            data["DIAGRAMME_PLANTUML"] = st.text_area("Diagramme PlantUML (optionnel)", height=100)
             submitted = st.form_submit_button("Ajouter la fiche")
             if submitted:
                 st.session_state.catalogue_rows.append(data)
@@ -368,90 +370,3 @@ if st.session_state.wizard_step == 4:
         canvas.setFont("Helvetica", 11)
         for titre, page in sommaire_items:
             canvas.drawString(2.3*cm, y, f"{titre}")
-            canvas.drawRightString(width - 2.3*cm, y, f"p. {page}")
-            y -= 0.7*cm
-    def normal_page(canvas, doc):
-        pass
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
-        pdf_path = tmpfile.name
-        width, height = A4
-        frame_width = (width - 4*cm) / 2
-        frame_height = height - 4*cm
-        frames = [
-            Frame(2*cm, 2*cm, frame_width, frame_height, showBoundary=0),
-            Frame(2*cm + frame_width, 2*cm, frame_width, frame_height, showBoundary=0)
-        ]
-        styles = getSampleStyleSheet()
-        titre_style = ParagraphStyle(
-            'TitreFiche', parent=styles['Heading2'], backColor=TITLE_COLOR,
-            textColor=colors.white, fontSize=13, leading=16, alignment=1, spaceAfter=8
-        )
-        normal_style = ParagraphStyle('Field', fontName="Helvetica", fontSize=10, leading=14, spaceAfter=4)
-        doc = BaseDocTemplate(pdf_path, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
-        doc.addPageTemplates([
-            PageTemplate(id="Couverture", frames=[Frame(2*cm, 2*cm, width - 4*cm, height - 4*cm)], onPage=couverture_page),
-            PageTemplate(id="Sommaire", frames=[Frame(2*cm, 2*cm, width - 4*cm, height - 4*cm)], onPage=sommaire_page),
-            PageTemplate(id="Fiches", frames=frames, onPage=normal_page)
-        ])
-        flowables = []
-        flowables.append(NextPageTemplate("Sommaire"))
-        flowables.append(PageBreak())
-        flowables.append(NextPageTemplate("Fiches"))
-        flowables.append(PageBreak())
-
-        # BARRE DE PROGRESSION STREAMLIT
-        progress_bar = st.progress(0, text="Génération du PDF...")
-
-        total = len(df)
-        for idx, row in df.iterrows():
-            card = []
-            card.append(Spacer(1, 0.1*cm))
-            card.append(Paragraph(str(row.get("TITRE", "")), titre_style))
-            card.append(Spacer(1, 0.2*cm))
-            img_col = "IMAGE 1"
-            if img_col in row and pd.notna(row[img_col]):
-                img_path = get_image_local_or_url(row[img_col])
-                if img_path and os.path.isfile(img_path):
-                    try:
-                        iw, ih = get_image_size_preserve_ratio(img_path, 4, 4)
-                        card.append(RLImage(img_path, width=iw, height=ih))
-                        card.append(Spacer(1, 0.2*cm))
-                    except Exception:
-                        card.append(Paragraph("<i>Image non chargée</i>", normal_style))
-                else:
-                    card.append(Paragraph("<i>Image introuvable</i>", normal_style))
-            for label, col in [("Description", "DESCRIPTION"), ("Prix", "PRIX"), ("Devise", "CODE_DEVISE"),
-                               ("Quantité", "QUANTITÉ"), ("Référence", "RÉFÉRENCE"),
-                               ("Tags", "TAGS"), ("Matériaux", "MATÉRIAUX")]:
-                if col in row and pd.notna(row[col]):
-                    value = str(row[col])
-                    if col == "DESCRIPTION" and len(value) > 400:
-                        value = value[:400] + " ..."
-                    card.append(Paragraph(f"<b>{label} :</b> {value}", normal_style))
-            for flow in card:
-                flowables.append(flow)
-            flowables.append(Spacer(1, 0.5*cm))
-            flowables.append(FrameBreak())
-            # MAJ PROGRESSION
-            percent = int((idx + 1) / total * 100)
-            progress_bar.progress(percent, text=f"Génération du PDF... {percent}%")
-        progress_bar.progress(100, text="PDF généré à 100%")
-        doc.build(flowables)
-        with open(pdf_path, "rb") as f:
-            st.download_button(
-                label="⬇️ Télécharger le PDF catalogue",
-                data=f,
-                file_name="catalogue.pdf",
-                mime="application/pdf"
-            )
-        os.remove(pdf_path)
-    st.success("PDF généré ! Télécharge-le ci-dessous 👇")
-    if st.button("🔄 Recommencer"):
-        reset_all()
-        st.rerun()
-
-if st.session_state.wizard_step not in [1, 2, 3, 4, 10]:
-    st.warning("⚠️ Aucune étape active dans l'assistant.")
-    if st.button("🔄 Retour à l'accueil"):
-        reset_all()
-        st.rerun()
