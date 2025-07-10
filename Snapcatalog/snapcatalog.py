@@ -57,7 +57,7 @@ DIAGRAMMES = [
     {"label": "Graphique 1", "file": "https://upload.wikimedia.org/wikipedia/commons/7/77/Bar_chart_example.png"},
     {"label": "Graphique 2", "file": "https://upload.wikimedia.org/wikipedia/commons/3/3a/Line_chart_example.png"},
 ]
-PEXELS_API_KEY = "TA_CLE_PEXELS_ICI"
+PEXELS_API_KEY = "301dcnTpPjiaMdSWCOvXz8Cj62pO0fgLPAdcz6EtHLvShgfPqN73YXQQ"
 
 if "template" not in st.session_state:
     st.session_state.template = 0
