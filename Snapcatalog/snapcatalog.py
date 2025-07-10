@@ -2,14 +2,13 @@ import streamlit as st
 import requests
 import tempfile
 import zlib
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Image as RLImage, Spacer
+import json
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Image as RLImage, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 import urllib.request
 from PIL import Image as PILImage
-
-# PlantUML helpers
 
 def plantuml_encode(uml_code):
     def encode(text):
@@ -46,7 +45,6 @@ def plantuml_to_png_url(uml_code):
     encoded = plantuml_encode(uml_code)
     return base_url + encoded
 
-# --- Config
 TEMPLATES = [
     {"name": "Carte moderne", "color": "#aee2fb"},
     {"name": "Carte classique", "color": "#d2fbb7"},
@@ -59,7 +57,7 @@ DIAGRAMMES = [
     {"label": "Graphique 1", "file": "images/chart2.png"},
     {"label": "Graphique 2", "file": "images/chart3.png"},
 ]
-PEXELS_API_KEY = "301dcnTpPjiaMdSWCOvXz8Cj62pO0fgLPAdcz6EtHLvShgfPqN73YXQQ"  # <-- Mets ta vraie clé ici !
+PEXELS_API_KEY = "TA_CLE_PEXELS_ICI"
 
 if "template" not in st.session_state:
     st.session_state.template = 0
@@ -74,7 +72,6 @@ if "iconify_icons" not in st.session_state:
 if "iconify_query" not in st.session_state:
     st.session_state.iconify_query = ""
 
-# --- SIDEBAR (gauche) ---
 with st.sidebar:
     st.markdown("## Template")
     temp_cols = st.columns(3)
@@ -152,8 +149,20 @@ with st.sidebar:
             st.image(dg["file"], width=40)
             if st.button("Choisir", key=f"diag_{i}"):
                 st.session_state.selected_diagramme = dg["file"]
+    st.markdown("---")
+    st.markdown("## Import/export projet")
+    export_str = json.dumps(st.session_state.blocs, ensure_ascii=False, indent=2)
+    st.download_button("⬇️ Exporter projet JSON", data=export_str, file_name="snapcatalog.json")
+    uploaded_json = st.file_uploader("Importer un projet JSON", type=["json"])
+    if uploaded_json:
+        try:
+            blocs = json.load(uploaded_json)
+            st.session_state.blocs = blocs
+            st.success("Projet chargé avec succès !")
+            st.experimental_rerun()
+        except Exception as e:
+            st.error(f"Erreur import : {e}")
 
-# --- ZONE CENTRALE ---
 st.markdown(
     f"<h1 style='text-align:center;font-weight:800;'>SnapCatalog</h1>"
     "<p style='text-align:center;font-size:1.2em;color:#888;'>Créer votre catalogue page par page en un clin d'œil</p>",
@@ -164,8 +173,8 @@ st.write("")
 template = TEMPLATES[st.session_state.template]
 border_color = st.session_state.color
 
-st.markdown("### Contenu de la page (ajoutez/supprimez des blocs ci-dessous)")
-bloc_types = ["Texte", "Image Pexels", "Icône (Iconify)", "Diagramme", "Diagramme API (PlantUML)"]
+st.markdown("### Contenu de la page (ajoutez/supprimez/réordonnez les blocs ci-dessous)")
+bloc_types = ["Texte", "Image Pexels", "Icône (Iconify)", "Diagramme", "Diagramme API (PlantUML)", "Saut de page"]
 new_bloc_type = st.selectbox("Ajouter un bloc", bloc_types, key="new_bloc_type")
 if st.button("Ajouter ce bloc"):
     if new_bloc_type == "Texte":
@@ -182,13 +191,15 @@ if st.button("Ajouter ce bloc"):
     elif new_bloc_type == "Diagramme API (PlantUML)":
         default_uml = "@startuml\nAlice -> Bob: Bonjour\n@enduml"
         st.session_state.blocs.append({"type": "diagramme_api", "uml": default_uml})
+    elif new_bloc_type == "Saut de page":
+        st.session_state.blocs.append({"type": "pagebreak"})
 
 for idx, bloc in enumerate(st.session_state.blocs):
     st.markdown(
         f"<div style='border:2px solid {border_color};border-radius:7px;padding:12px 16px;margin:10px 0;background:{template['color']};'>",
         unsafe_allow_html=True
     )
-    cols = st.columns([6,1])
+    cols = st.columns([7,1,1,1])
     with cols[0]:
         if bloc["type"] == "texte":
             val = st.text_area(f"Texte du bloc {idx+1}", bloc.get("contenu",""), key=f"bloc_txt_{idx}")
@@ -219,13 +230,26 @@ for idx, bloc in enumerate(st.session_state.blocs):
             st.session_state.blocs[idx]["uml"] = uml_code
             img_url = plantuml_to_png_url(uml_code)
             st.image(img_url, width=250)
+        elif bloc["type"] == "pagebreak":
+            st.markdown("<div style='color:#1976d2;font-size:1.2em;font-weight:700;text-align:center;'>—— Saut de page / Nouvelle page ——</div>", unsafe_allow_html=True)
     with cols[1]:
+        if idx > 0 and st.button("⬆️", key=f"up_{idx}"):
+            st.session_state.blocs[idx-1], st.session_state.blocs[idx] = st.session_state.blocs[idx], st.session_state.blocs[idx-1]
+            st.experimental_rerun()
+    with cols[2]:
+        if idx < len(st.session_state.blocs)-1 and st.button("⬇️", key=f"down_{idx}"):
+            st.session_state.blocs[idx+1], st.session_state.blocs[idx] = st.session_state.blocs[idx], st.session_state.blocs[idx+1]
+            st.experimental_rerun()
+    with cols[3]:
         if st.button("❌", key=f"delete_bloc_{idx}"):
             st.session_state.blocs.pop(idx)
             st.experimental_rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
-# --- Génération du PDF à partir des blocs ---
+# --- Pagination automatique (hors sauts de page manuels) ---
+st.markdown("#### Pagination automatique")
+blocs_per_page = st.number_input("Nombre de blocs (hors sauts de page) par page PDF", min_value=1, max_value=20, value=6, step=1)
+
 def get_image_path_or_temp(url):
     if url is None:
         return None
@@ -234,6 +258,43 @@ def get_image_path_or_temp(url):
         urllib.request.urlretrieve(url, tmpimg.name)
         return tmpimg.name
     return url
+
+def blocs_to_pdf_flowables(blocs, style_normal, blocs_per_page):
+    flowables = []
+    count = 0
+    for bloc in blocs:
+        if bloc["type"] == "pagebreak":
+            flowables.append(PageBreak())
+            count = 0
+            continue
+        if count > 0 and count % blocs_per_page == 0:
+            flowables.append(PageBreak())
+        if bloc["type"] == "texte":
+            txt = bloc.get("contenu", "")
+            flowables.append(Paragraph(txt, style_normal))
+        elif bloc["type"] in ["pexels", "iconify", "diagramme"]:
+            img_url = bloc.get("url")
+            img_path = get_image_path_or_temp(img_url)
+            if img_path:
+                try:
+                    pil_img = PILImage.open(img_path)
+                    w, h = pil_img.size
+                    maxw, maxh = 350, 200
+                    ratio = min(maxw / w, maxh / h, 1)
+                    flowables.append(RLImage(img_path, width=w * ratio, height=h * ratio))
+                except Exception as e:
+                    flowables.append(Paragraph(f"<i>Image non chargée : {e}</i>", style_normal))
+            flowables.append(Spacer(1, 14))
+        elif bloc["type"] == "diagramme_api":
+            uml_code = bloc.get("uml")
+            if uml_code:
+                img_url = plantuml_to_png_url(uml_code)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpimg:
+                    urllib.request.urlretrieve(img_url, tmpimg.name)
+                    flowables.append(RLImage(tmpimg.name, width=250))
+            flowables.append(Spacer(1, 14))
+        count += 1 if bloc["type"] != "pagebreak" else 0
+    return flowables
 
 if st.button("Générer le PDF avec ces blocs"):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
@@ -248,33 +309,8 @@ if st.button("Générer le PDF avec ces blocs"):
             leading=16,
             spaceAfter=10,
         )
+        flowables = blocs_to_pdf_flowables(st.session_state.blocs, style_normal, blocs_per_page)
         doc = SimpleDocTemplate(tmpfile.name, pagesize=A4)
-        flowables = []
-        for bloc in st.session_state.blocs:
-            if bloc["type"] == "texte":
-                txt = bloc.get("contenu", "")
-                flowables.append(Paragraph(txt, style_normal))
-            elif bloc["type"] in ["pexels", "iconify", "diagramme"]:
-                img_url = bloc.get("url")
-                img_path = get_image_path_or_temp(img_url)
-                if img_path:
-                    try:
-                        pil_img = PILImage.open(img_path)
-                        w, h = pil_img.size
-                        maxw, maxh = 350, 200
-                        ratio = min(maxw / w, maxh / h, 1)
-                        flowables.append(RLImage(img_path, width=w * ratio, height=h * ratio))
-                    except Exception as e:
-                        flowables.append(Paragraph(f"<i>Image non chargée : {e}</i>", style_normal))
-                flowables.append(Spacer(1, 14))
-            elif bloc["type"] == "diagramme_api":
-                uml_code = bloc.get("uml")
-                if uml_code:
-                    img_url = plantuml_to_png_url(uml_code)
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpimg:
-                        urllib.request.urlretrieve(img_url, tmpimg.name)
-                        flowables.append(RLImage(tmpimg.name, width=250))
-                flowables.append(Spacer(1, 14))
         doc.build(flowables)
         with open(tmpfile.name, "rb") as f:
             st.download_button(
@@ -286,7 +322,8 @@ if st.button("Générer le PDF avec ces blocs"):
 
 st.markdown(
     "<hr><div style='text-align:center;color:#aaa;'>"
-    "Ce que tu vois dans la maquette s’exporte tel quel dans le PDF. <br>"
-    "Tu peux ajouter, supprimer, réordonner les blocs (fonction drag&drop possible sur demande)."
+    "Ce que tu vois dans la maquette s’exporte tel quel dans le PDF.<br>"
+    "Tu peux ajouter, supprimer, réordonner les blocs (drag&drop via flèches), sauter de page.<br>"
+    "Export/import projet, pagination automatique paramétrable.<br>"
     "</div>", unsafe_allow_html=True
 )
