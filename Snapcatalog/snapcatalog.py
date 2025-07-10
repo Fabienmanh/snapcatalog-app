@@ -1,6 +1,44 @@
 import streamlit as st
 import requests
 import tempfile
+import zlib
+import requests
+
+def plantuml_encode(uml_code):
+    def encode(text):
+        data = zlib.compress(text.encode('utf-8'))
+        res = ''
+        for i in range(0, len(data), 3):
+            if i+2<len(data):
+                res += _encode3bytes(data[i],data[i+1],data[i+2])
+            elif i+1<len(data):
+                res += _encode3bytes(data[i],data[i+1],0)
+            else:
+                res += _encode3bytes(data[i],0,0)
+        return res
+    def _encode3bytes(b1,b2,b3):
+        c1 = b1 >> 2
+        c2 = ((b1 & 0x3) << 4) | (b2 >> 4)
+        c3 = ((b2 & 0xF) << 2) | (b3 >> 6)
+        c4 = b3 & 0x3F
+        return ''.join([encode6bit(c) for c in (c1,c2,c3,c4)])
+    def encode6bit(b):
+        if b < 10: return chr(48 + b)
+        b -= 10
+        if b < 26: return chr(65 + b)
+        b -= 26
+        if b < 26: return chr(97 + b)
+        b -= 26
+        if b == 0: return '-'
+        if b == 1: return '_'
+        return '?'
+    return encode(uml_code)
+
+def plantuml_to_png_url(uml_code):
+    base_url = "https://www.plantuml.com/plantuml/png/"
+    encoded = plantuml_encode(uml_code)
+    return base_url + encoded
+
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Image as RLImage, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.pagesizes import A4
@@ -127,7 +165,7 @@ template = TEMPLATES[st.session_state.template]
 border_color = st.session_state.color
 
 st.markdown("### Contenu de la page (ajoutez/supprimez des blocs ci-dessous)")
-bloc_types = ["Texte", "Image Pexels", "Icône (Iconify)", "Diagramme"]
+bloc_types = ["Texte", "Image Pexels", "Icône (Iconify)", "Diagramme", "Diagramme API (PlantUML)"]
 new_bloc_type = st.selectbox("Ajouter un bloc", bloc_types, key="new_bloc_type")
 if st.button("Ajouter ce bloc"):
     if new_bloc_type == "Texte":
@@ -141,6 +179,9 @@ if st.button("Ajouter ce bloc"):
     elif new_bloc_type == "Diagramme":
         url = st.session_state.get("selected_diagramme", None)
         st.session_state.blocs.append({"type": "diagramme", "url": url})
+    elif new_bloc_type == "Diagramme API (PlantUML)":
+        default_uml = "@startuml\nAlice -> Bob: Bonjour\n@enduml"
+        st.session_state.blocs.append({"type": "diagramme_api", "uml": default_uml})
 
 for idx, bloc in enumerate(st.session_state.blocs):
     st.markdown(
@@ -171,6 +212,12 @@ for idx, bloc in enumerate(st.session_state.blocs):
             if diag_url:
                 st.image(diag_url, width=120)
                 st.session_state.blocs[idx]["url"] = diag_url
+    elif bloc["type"] == "diagramme_api":
+        uml_code = st.text_area(f"Code PlantUML bloc {idx+1}", bloc.get("uml",""), key=f"uml_{idx}")
+        st.session_state.blocs[idx]["uml"] = uml_code
+        img_url = plantuml_to_png_url(uml_code)
+        st.image(img_url, width=250)
+
             else:
                 st.info("Sélectionnez un diagramme dans la sidebar")
     with cols[1]:
@@ -212,6 +259,16 @@ if st.button("Générer le PDF avec ces blocs"):
             elif bloc["type"] in ["pexels", "iconify", "diagramme"]:
                 img_url = bloc.get("url")
                 img_path = get_image_path_or_temp(img_url)
+                if bloc["type"] == "diagramme_api":
+        uml_code = bloc.get("uml")
+            if uml_code:
+                img_url = plantuml_to_png_url(uml_code)
+            # Télécharge l’image dans un fichier temporaire pour le PDF
+                import urllib.request, tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpimg:
+                    urllib.request.urlretrieve(img_url, tmpimg.name)
+                    flowables.append(RLImage(tmpimg.name, width=250))
+        flowables.append(Spacer(1, 14))
                 if img_path:
                     try:
                         # Ajuste la taille
@@ -222,7 +279,7 @@ if st.button("Générer le PDF avec ces blocs"):
                         flowables.append(RLImage(img_path, width=w * ratio, height=h * ratio))
                     except Exception as e:
                         flowables.append(Paragraph(f"<i>Image non chargée : {e}</i>", style_normal))
-            flowables.append(Spacer(1, 14))
+                flowables.append(Spacer(1, 14))
         doc.build(flowables)
         with open(tmpfile.name, "rb") as f:
             st.download_button(
