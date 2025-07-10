@@ -2,7 +2,14 @@ import streamlit as st
 import requests
 import tempfile
 import zlib
-import requests
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Image as RLImage, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+import urllib.request
+from PIL import Image as PILImage
+
+# PlantUML helpers
 
 def plantuml_encode(uml_code):
     def encode(text):
@@ -39,13 +46,6 @@ def plantuml_to_png_url(uml_code):
     encoded = plantuml_encode(uml_code)
     return base_url + encoded
 
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Image as RLImage, Spacer, PageBreak
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-import urllib.request
-from PIL import Image as PILImage
-
 # --- Config
 TEMPLATES = [
     {"name": "Carte moderne", "color": "#aee2fb"},
@@ -59,7 +59,7 @@ DIAGRAMMES = [
     {"label": "Graphique 1", "file": "images/chart2.png"},
     {"label": "Graphique 2", "file": "images/chart3.png"},
 ]
-PEXELS_API_KEY = "TA_CLE_PEXELS_ICI"  # <-- Mets ta vraie clé ici !
+PEXELS_API_KEY = "301dcnTpPjiaMdSWCOvXz8Cj62pO0fgLPAdcz6EtHLvShgfPqN73YXQQ"  # <-- Mets ta vraie clé ici !
 
 if "template" not in st.session_state:
     st.session_state.template = 0
@@ -212,14 +212,13 @@ for idx, bloc in enumerate(st.session_state.blocs):
             if diag_url:
                 st.image(diag_url, width=120)
                 st.session_state.blocs[idx]["url"] = diag_url
-    elif bloc["type"] == "diagramme_api":
-        uml_code = st.text_area(f"Code PlantUML bloc {idx+1}", bloc.get("uml",""), key=f"uml_{idx}")
-        st.session_state.blocs[idx]["uml"] = uml_code
-        img_url = plantuml_to_png_url(uml_code)
-        st.image(img_url, width=250)
-
             else:
                 st.info("Sélectionnez un diagramme dans la sidebar")
+        elif bloc["type"] == "diagramme_api":
+            uml_code = st.text_area(f"Code PlantUML bloc {idx+1}", bloc.get("uml",""), key=f"uml_{idx}")
+            st.session_state.blocs[idx]["uml"] = uml_code
+            img_url = plantuml_to_png_url(uml_code)
+            st.image(img_url, width=250)
     with cols[1]:
         if st.button("❌", key=f"delete_bloc_{idx}"):
             st.session_state.blocs.pop(idx)
@@ -228,7 +227,6 @@ for idx, bloc in enumerate(st.session_state.blocs):
 
 # --- Génération du PDF à partir des blocs ---
 def get_image_path_or_temp(url):
-    # Télécharge l'image si URL, sinon retourne le path
     if url is None:
         return None
     if url.startswith("http"):
@@ -259,19 +257,8 @@ if st.button("Générer le PDF avec ces blocs"):
             elif bloc["type"] in ["pexels", "iconify", "diagramme"]:
                 img_url = bloc.get("url")
                 img_path = get_image_path_or_temp(img_url)
-                if bloc["type"] == "diagramme_api":
-        uml_code = bloc.get("uml")
-            if uml_code:
-                img_url = plantuml_to_png_url(uml_code)
-            # Télécharge l’image dans un fichier temporaire pour le PDF
-                import urllib.request, tempfile
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpimg:
-                    urllib.request.urlretrieve(img_url, tmpimg.name)
-                    flowables.append(RLImage(tmpimg.name, width=250))
-        flowables.append(Spacer(1, 14))
                 if img_path:
                     try:
-                        # Ajuste la taille
                         pil_img = PILImage.open(img_path)
                         w, h = pil_img.size
                         maxw, maxh = 350, 200
@@ -279,6 +266,14 @@ if st.button("Générer le PDF avec ces blocs"):
                         flowables.append(RLImage(img_path, width=w * ratio, height=h * ratio))
                     except Exception as e:
                         flowables.append(Paragraph(f"<i>Image non chargée : {e}</i>", style_normal))
+                flowables.append(Spacer(1, 14))
+            elif bloc["type"] == "diagramme_api":
+                uml_code = bloc.get("uml")
+                if uml_code:
+                    img_url = plantuml_to_png_url(uml_code)
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpimg:
+                        urllib.request.urlretrieve(img_url, tmpimg.name)
+                        flowables.append(RLImage(tmpimg.name, width=250))
                 flowables.append(Spacer(1, 14))
         doc.build(flowables)
         with open(tmpfile.name, "rb") as f:
