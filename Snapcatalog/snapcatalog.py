@@ -276,10 +276,10 @@ def blocs_to_pdf_flowables(blocs, style_normal, blocs_per_page):
         if bloc["type"] == "texte":
             txt = bloc.get("contenu", "")
             flowables.append(Paragraph(txt, style_normal))
-        elif bloc["type"] in ["pexels", "iconify", "diagramme"]:
+        if bloc["type"] in ["pexels", "iconify", "diagramme"]:
             img_url = bloc.get("url")
             img_path = get_image_path_or_temp(img_url)
-            if img_path:
+            if img_path and img_path != "IMAGE_ERROR":
                 try:
                     pil_img = PILImage.open(img_path)
                     w, h = pil_img.size
@@ -287,8 +287,13 @@ def blocs_to_pdf_flowables(blocs, style_normal, blocs_per_page):
                     ratio = min(maxw / w, maxh / h, 1)
                     flowables.append(RLImage(img_path, width=w * ratio, height=h * ratio))
                 except Exception as e:
-                    flowables.append(Paragraph(f"<i>Image non chargée : {e}</i>", style_normal))
-            flowables.append(Spacer(1, 14))
+                    flowables.append(Paragraph("<i>Image non chargée</i>", style_normal))
+    else:
+        # Ici, on affiche une icône d’erreur ou un message personnalisé
+        # (Icône unicode, emoji, ou tu peux mettre un petit PNG local)
+        flowables.append(Paragraph("❌ <i>Image inaccessible</i>", style_normal))
+    flowables.append(Spacer(1, 14))
+
         elif bloc["type"] == "diagramme_api":
             uml_code = bloc.get("uml")
             if uml_code:
