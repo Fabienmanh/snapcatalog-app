@@ -252,11 +252,15 @@ blocs_per_page = st.number_input("Nombre de blocs (hors sauts de page) par page 
 
 def get_image_path_or_temp(url):
     if url is None:
-        return None
+        return "IMAGE_ERROR"
     if url.startswith("http"):
-        tmpimg = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-        urllib.request.urlretrieve(url, tmpimg.name)
-        return tmpimg.name
+        try:
+            tmpimg = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+            urllib.request.urlretrieve(url, tmpimg.name)
+            return tmpimg.name
+        except Exception as e:
+            print(f"Erreur lors du téléchargement de l’image {url} : {e}")
+            return "IMAGE_ERROR"
     return url
 
 def blocs_to_pdf_flowables(blocs, style_normal, blocs_per_page):
