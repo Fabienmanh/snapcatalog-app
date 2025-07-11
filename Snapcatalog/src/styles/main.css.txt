@@ -1,0 +1,4 @@
+.app-root { max-width: 900px; margin: 0 auto; font-family: 'Inter', Arial, sans-serif; }
+.toolbar { background: #eee; padding: 12px; margin-bottom: 24px; border-radius: 8px; }
+.block-list { }
+.block-item { border-radius: 7px; border: 2px solid #ddd; box-shadow: 0 2px 4px #0001; }
