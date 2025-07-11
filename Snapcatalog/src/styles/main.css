@@ -2,3 +2,14 @@
 .toolbar { background: #eee; padding: 12px; margin-bottom: 24px; border-radius: 8px; }
 .block-list { }
 .block-item { border-radius: 7px; border: 2px solid #ddd; box-shadow: 0 2px 4px #0001; }
+.block-item {
+  border-radius: 7px;
+  border: 2px solid #ddd;
+  box-shadow: 0 2px 4px #0001;
+  background: #fff;
+  margin-bottom: 10px;
+  transition: box-shadow 0.18s;
+}
+.block-item:active, .block-item[aria-pressed="true"] {
+  box-shadow: 0 6px 18px #0002;
+}
